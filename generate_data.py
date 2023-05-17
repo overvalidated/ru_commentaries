@@ -64,11 +64,11 @@ def generate(
         ],
     )
     collated = collator(tokenized).to(device)
-    print(collated['input_ids'].shape)
+    print(collated["input_ids"].shape)
     with torch.no_grad():
         generation_output = model.generate(
-            input_ids=collated['input_ids'],
-            attention_mask=collated['attention_mask'],
+            input_ids=collated["input_ids"],
+            attention_mask=collated["attention_mask"],
             generation_config=generation_config,
             max_new_tokens=max_new_tokens,
             eos_token_id=2,
