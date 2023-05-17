@@ -154,7 +154,6 @@ model = transformers.EncoderDecoderModel.from_pretrained(
     "./encoder_decoder/checkpoint-300"
 ).cuda()
 # %%
-## Testing for
 
 tokenizer1.padding_side = "left"  # Allow batched inference
 tokenizer2.padding_side = "left"  # Allow batched inference
