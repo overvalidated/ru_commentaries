@@ -1,19 +1,13 @@
 # %%
-from typing import List, NamedTuple
-
 import torch
 import transformers
-from huggingface_hub import hf_hub_download
 from peft import PeftModel
 from transformers import GenerationConfig
-import deepspeed
-from accelerate import init_empty_weights
-from transformers import AutoConfig, AutoModelForCausalLM
-from accelerate import load_checkpoint_and_dispatch
-from accelerate import Accelerator
 import datasets
+from tqdm import tqdm
+import pickle
 
-
+# %%
 model = transformers.AutoModelForCausalLM.from_pretrained(
     "decapoda-research/llama-7b-hf", device_map="auto", torch_dtype=torch.float16
 )  # Load Base Model
@@ -48,52 +42,67 @@ generation_config = GenerationConfig(
     num_beams=1,
 )
 
-# model = torch.compile(model, backend='nvprims_nvfuser')
 
 def format_system_prompt(prompt, eos_token="</s>"):
     return "{}{}{}{}".format("<|prompter|>", prompt, eos_token, "<|assistant|>")
 
 
+collator = transformers.DataCollatorWithPadding(
+    tokenizer=tokenizer, padding=True, pad_to_multiple_of=8
+)
+
+
 def generate(
-    prompt, generation_config=generation_config, max_new_tokens=384, device=device
+    prompt, generation_config=generation_config, max_new_tokens=128, device=device
 ):
-    prompt = format_system_prompt(prompt)  # OpenAssistant Prompt Format expected
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+    tokenized = tokenizer(
+        [
+            format_system_prompt(
+                "Explain what this code does. Describe its purpose. " + entry
+            )
+            for entry in prompt["func_code_string"]
+        ],
+    )
+    collated = collator(tokenized).to(device)
+    print(collated['input_ids'].shape)
     with torch.no_grad():
         generation_output = model.generate(
-            input_ids=input_ids,
+            input_ids=collated['input_ids'],
+            attention_mask=collated['attention_mask'],
             generation_config=generation_config,
-            return_dict_in_generate=True,
-            output_scores=True,
             max_new_tokens=max_new_tokens,
             eos_token_id=2,
         )
-    s = generation_output.sequences[0]
-    output = tokenizer.decode(s).split("<|assistant|>")[-1]
+    output = [
+        ret.split("<|assistant|>")[-1]
+        for ret in tokenizer.batch_decode(generation_output)
+    ]
     return output
 
 
 # %%
-data_csn = datasets.load_dataset("martiwey/code-search-net-clean").shuffle(seed=42)
+data_csn = datasets.load_dataset("martiwey/code-search-net-clean")
 # %%
-data_csn = data_csn.filter(lambda x: len(x["func_code_string"]) < 768, num_proc=12)
-data_csn = data_csn.shuffle(seed=42)
+data_csn = data_csn.filter(lambda x: len(x["func_code_string"]) < 304, num_proc=12)
+data_csn = data_csn.shuffle(seed=42000)
 # %%
 model = torch.compile(model)
 # %%
-from tqdm import tqdm
-import pickle
+batch_size = 8
 
 responses = {}
-for n, i in enumerate(tqdm(data_csn["train"])):
-    output = generate(
-        "Explain what this code does. Describe its purpose. " + i["func_code_string"]
-    )
-    responses[i["func_code_string"]] = output
-    if n % 200 == 0:
+for i in tqdm(range(0, len(data_csn["train"]), batch_size)):
+    output = generate(data_csn["train"][i : i + batch_size])
+    for output_idx in range(len(output)):
+        responses[data_csn["train"][i + output_idx]["func_code_string"]] = output[
+            output_idx
+        ]
+    if i % 200 == 0:
         with open("llama_comments_7b_final.pkl", "wb") as f:
             pickle.dump(responses, f)
-        print("saved responses", n)
+        print("saved responses", i)
 
 with open("llama_comments_7b_final.pkl", "wb") as f:
     pickle.dump(responses, f)
+
+# %%
