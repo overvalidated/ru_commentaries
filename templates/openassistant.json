@@ -1,0 +1,6 @@
+{
+    "description": "OpenAssistant prompt format.",
+    "prompt_input": ":<|system|>\nBelow is a dialogue between a human and an AI assistant called StarChat.<|end|><|user|>{instruction} {input}</s><|assistant|>\n",
+    "prompt_no_input": "<|system|>\nBelow is a dialogue between a human and an AI assistant called StarChat.<|end|><|user|>{instruction}</s><|assistant|>",
+    "response_split": "<|assistant|>"
+}
