@@ -19,6 +19,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer = transformers.AutoTokenizer.from_pretrained(
     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b", use_fast=False
 )
+tokenizer.padding_side = "left"
 
 model.config.eos_token_id = tokenizer.eos_token_id
 model.config.bos_token_id = tokenizer.bos_token_id
