@@ -65,7 +65,6 @@ def generate(
         ],
     )
     collated = collator(tokenized).to(device)
-    print(collated["input_ids"].shape)
     with torch.no_grad():
         generation_output = model.generate(
             input_ids=collated["input_ids"],
