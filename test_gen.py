@@ -4,8 +4,6 @@ import transformers
 from huggingface_hub import hf_hub_download
 from peft import PeftModel
 
-from peft import PeftModel
-
 # %%
 ##!! CODE FOR LLAMA TESTING
 # prompter = Prompter(prompt_template_name)
