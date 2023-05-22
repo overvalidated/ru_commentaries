@@ -8,8 +8,7 @@ import transformers
 import pickle as pkl
 from huggingface_hub import hf_hub_download
 from peft import get_peft_model_state_dict, PeftModel, LoraConfig, get_peft_model
-import evaluate
-from tqdm import tqdm
+
 from utils.prompter import Prompter
 
 """
@@ -19,35 +18,64 @@ learning_rate = 1e-4
 cutoff_len = 1024
 """
 
-output_dir: str = "./lora-alpaca-final"
-batch_size: int = 128
-micro_batch_size: int = 4
+output_dir: str = "./lora-alpaca-small"
 num_epochs: int = 2
-cutoff_len: int = 256
 val_set_size: int = 2000
 train_on_inputs: bool = True  # if False, masks out inputs in loss
 prompt_template_name: str = "openassistant"  # The prompt template to use, will default to openassistant.
-batch_size = 256
+batch_size = 512
 micro_batch_size = 1
-learning_rate = 2e-4
-cutoff_len = 256+256
-eval_mode = False
+learning_rate = 7e-5
+cutoff_len = 384+256
 gradient_accumulation_steps = batch_size // micro_batch_size
 
 prompter = Prompter(prompt_template_name)
 
 tokenizer = transformers.LlamaTokenizer.from_pretrained(
-    "decapoda-research/llama-7b-hf"
+    "openlm-research/open_llama_3b_350bt_preview"
 )
 
-model = transformers.LlamaForCausalLM.from_pretrained(
-    "decapoda-research/llama-7b-hf", 
-    torch_dtype=torch.float16
-)  # Load Base Model  # This model repo also contains several embeddings for special tokens that need to be loaded.
+config = transformers.LlamaConfig(**{
+  "architectures": [
+    "LlamaForCausalLM"
+  ],
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "hidden_act": "silu",
+  "hidden_size": 2048,
+  "initializer_range": 0.02,
+  "intermediate_size": 5280,
+  "max_position_embeddings": 2048,
+  "model_type": "llama",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 20,
+  "pad_token_id": 0,
+  "rms_norm_eps": 1e-06,
+  "tie_word_embeddings": False,
+  "torch_dtype": torch.float16,
+  "use_cache": True,
+  "vocab_size": 32000
+})
 
-model.config.eos_token_id = tokenizer.eos_token_id
-model.config.bos_token_id = tokenizer.bos_token_id
-model.config.pad_token_id = tokenizer.pad_token_id
+model = transformers.LlamaForCausalLM(
+    config
+)
+# model_emb = transformers.LlamaForCausalLM.from_pretrained(
+#     "decapoda-research/llama-7b-hf", torch_dtype=torch.float16
+# )  # Load Base Model
+
+# model.set_input_embeddings(model_emb.get_input_embeddings())
+# del model_emb
+# model.resize_token_embeddings(
+#     len(tokenizer)
+# )  # This model repo also contains several embeddings for special tokens that need to be loaded.
+
+tokenizer.pad_token_id = 0
+tokenizer.bad_token_id = 1
+tokenizer.eos_token_id = 2
+# model.config.eos_token_id = tokenizer.eos_token_id
+# model.config.bos_token_id = tokenizer.bos_token_id
+# model.config.pad_token_id = tokenizer.pad_token_id
 
 tokenizer.padding_side = "left"  # Allow batched inference
 
@@ -86,44 +114,40 @@ def generate_and_tokenize_prompt_mydata(data_point):
     #     + "Describe its purpose.",
     #     data_point["code"]
     # )
-    user_prompt = data_point['code'] + "<comment>"
-    tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
-    user_prompt_len = len(tokenized_user_prompt["input_ids"])
+    # user_prompt = data_point['code'] + "<comment>"
+    # tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
+    # user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
-    tokenized_full_prompt["labels"] = [
-        -100
-    ] * user_prompt_len + tokenized_full_prompt["labels"][
-        user_prompt_len:
-    ]  # could be sped up, probably
+    # tokenized_full_prompt["labels"] = [
+    #     -100
+    # ] * user_prompt_len + tokenized_full_prompt["labels"][
+    #     user_prompt_len:
+    # ]  # could be sped up, probably
     return tokenized_full_prompt
 
-if not eval_mode:
-    lora_r: int = 8
-    lora_alpha: int = 16
-    lora_dropout: float = 0.05
-    lora_target_modules = [
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-    ]
-    config = LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        target_modules=lora_target_modules,
-        lora_dropout=lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, config)
-else:
-    model = PeftModel.from_pretrained(model, output_dir, is_trainable=False)
-    model.eval()
+# model = PeftModel.from_pretrained(
+#     model,
+#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b",
+#     torch_dtype=torch.float16,
+#     is_trainable=True,
+# )
+# model.print_trainable_parameters()
+
+# model.eos_token_id = tokenizer.eos_token_id
+# filename = hf_hub_download(
+#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b", "extra_embeddings.pt"
+# )
+# embed_weights = torch.load(
+#     filename, map_location="cpu"
+# )  # Load embeddings for special tokens
+# model.base_model.model.model.embed_tokens.weight[32000:, :] = embed_weights.to(
+#     model.base_model.model.model.embed_tokens.weight.dtype
+# )  # Add special token embeddings
+# for param in model.base_model.model.model.embed_tokens.parameters():
+#     param.require_grad = True
 
 model = model.to("cuda")
-
 model.enable_input_require_grads()
-
 with open("llama_comments_7b_final.pkl", "rb") as f:
     data_eng = pkl.load(f)
 with open("llama_comments_7b_final_translated.pkl", "rb") as f:
@@ -206,7 +230,7 @@ val_data = (
 trainer_args = transformers.TrainingArguments(
     per_device_train_batch_size=micro_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    gradient_checkpointing=True,
+    # gradient_checkpointing=True,
     warmup_steps=100,
     num_train_epochs=num_epochs,
     learning_rate=learning_rate,
@@ -216,9 +240,8 @@ trainer_args = transformers.TrainingArguments(
     logging_steps=10,
     evaluation_strategy="steps" if val_set_size > 0 else "no",
     save_strategy="steps",
-    eval_steps=100 if val_set_size > 0 else None,
+    eval_steps=400 if val_set_size > 0 else None,
     save_steps=150,
-    max_steps=400,
     # fp16_opt_level='O3',
     optim='adamw_torch',
     output_dir=output_dir,
@@ -254,32 +277,34 @@ trainer.train()
 
 model.save_pretrained(output_dir)
 
-sacrebleu = evaluate.load('sacrebleu')
-rouge = evaluate.load('rouge')
+code = """def generate_and_tokenize_prompt(data_point):
+full_prompt = '<lang>' + data_point['lang'] + '<code>' + data_point["code"] + '<docstring>' + data_point["comment"]
+tokenized_full_prompt = tokenize(full_prompt)
+return tokenized_full_prompt
+"""
+# full_prompt = prompter.generate_prompt(
+#     "Explain this code in "
+#     + "Russian. "
+#     + "Describe its purpose.",
+#     code,
+# )
+instruct = tokenizer(
+    code + "<comment>",
+    return_tensors="pt",
+    truncation=True,
+    max_length=384,
+).to("cuda:0")
 
 with torch.inference_mode():
-    gts = []
-    preds = []
-    i = 0
-    for batch in tqdm(train_val["test"].shuffle(seed=42)):
-        full_prompt = batch['code'] + "<comment>"
-        # tokenized_full_prompt = tokenize(full_prompt, tensors='pt', add_eos_token=False).to('cuda:0')
-        tokenized_full_prompt = tokenizer(
-            full_prompt, truncation=True, max_length=cutoff_len, return_tensors='pt'
-        ).to('cuda:0')
-
-        predict = tokenizer.decode(
+    print(
+        tokenizer.decode(
             model.generate(
-                input_ids=tokenized_full_prompt["input_ids"], num_beams=1, max_new_tokens=256
+                input_ids=instruct["input_ids"], num_beams=1, max_new_tokens=256
             )
             .cpu()
             .numpy()[0],
             skip_special_tokens=True
-        ).split('<comment>')[-1]
-        preds.append(predict)
-        gts.append([batch['comment']])
-        i += 1
-        if i == 300:
-            break
-    print('3b blue', sacrebleu.compute(predictions=preds, references=gts)['score'])
-    print('3b rouge2', rouge.compute(predictions=preds, references=gts))
+        )
+    )
+
+model.save_pretrained(output_dir)

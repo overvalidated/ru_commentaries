@@ -8,8 +8,8 @@ import transformers
 import pickle as pkl
 from huggingface_hub import hf_hub_download
 from peft import get_peft_model_state_dict, PeftModel, LoraConfig, get_peft_model
-import evaluate
 from tqdm import tqdm
+import evaluate
 from utils.prompter import Prompter
 
 """
@@ -19,7 +19,7 @@ learning_rate = 1e-4
 cutoff_len = 1024
 """
 
-output_dir: str = "./lora-alpaca-final"
+output_dir: str = "./lora-alpaca-3b"
 batch_size: int = 128
 micro_batch_size: int = 4
 num_epochs: int = 2
@@ -37,25 +37,31 @@ gradient_accumulation_steps = batch_size // micro_batch_size
 prompter = Prompter(prompt_template_name)
 
 tokenizer = transformers.LlamaTokenizer.from_pretrained(
-    "decapoda-research/llama-7b-hf"
+    "openlm-research/open_llama_3b_350bt_preview"
 )
 
 model = transformers.LlamaForCausalLM.from_pretrained(
-    "decapoda-research/llama-7b-hf", 
+    "openlm-research/open_llama_3b_350bt_preview", 
     torch_dtype=torch.float16
-)  # Load Base Model  # This model repo also contains several embeddings for special tokens that need to be loaded.
+)  # Load Base Model
+# model.resize_token_embeddings(
+#     len(tokenizer)
+# )  # This model repo also contains several embeddings for special tokens that need to be loaded.
 
-model.config.eos_token_id = tokenizer.eos_token_id
-model.config.bos_token_id = tokenizer.bos_token_id
-model.config.pad_token_id = tokenizer.pad_token_id
+tokenizer.pad_token_id = 0
+tokenizer.bad_token_id = 1
+tokenizer.eos_token_id = 2
+# model.config.eos_token_id = tokenizer.eos_token_id
+# model.config.bos_token_id = tokenizer.bos_token_id
+# model.config.pad_token_id = tokenizer.pad_token_id
 
 tokenizer.padding_side = "left"  # Allow batched inference
 
-def tokenize(prompt, add_eos_token=True):
+def tokenize(prompt, add_eos_token=True, tensors=None):
     # there's probably a way to do this with the tokenizer settings
     # but again, gotta move fast
     result = tokenizer(
-        prompt, truncation=True, max_length=cutoff_len, return_tensors=None
+        prompt, truncation=True, max_length=cutoff_len, return_tensors=tensors
     )
     if (
         result["input_ids"][-1] != tokenizer.eos_token_id
@@ -120,10 +126,29 @@ else:
     model = PeftModel.from_pretrained(model, output_dir, is_trainable=False)
     model.eval()
 
+# model = PeftModel.from_pretrained(
+#     model,
+#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b",
+#     torch_dtype=torch.float16,
+#     is_trainable=True,
+# )
+# model.print_trainable_parameters()
+
+# model.eos_token_id = tokenizer.eos_token_id
+# filename = hf_hub_download(
+#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b", "extra_embeddings.pt"
+# )
+# embed_weights = torch.load(
+#     filename, map_location="cpu"
+# )  # Load embeddings for special tokens
+# model.base_model.model.model.embed_tokens.weight[32000:, :] = embed_weights.to(
+#     model.base_model.model.model.embed_tokens.weight.dtype
+# )  # Add special token embeddings
+# for param in model.base_model.model.model.embed_tokens.parameters():
+#     param.require_grad = True
 model = model.to("cuda")
 
 model.enable_input_require_grads()
-
 with open("llama_comments_7b_final.pkl", "rb") as f:
     data_eng = pkl.load(f)
 with open("llama_comments_7b_final_translated.pkl", "rb") as f:
@@ -206,7 +231,7 @@ val_data = (
 trainer_args = transformers.TrainingArguments(
     per_device_train_batch_size=micro_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    gradient_checkpointing=True,
+    # gradient_checkpointing=True,
     warmup_steps=100,
     num_train_epochs=num_epochs,
     learning_rate=learning_rate,
@@ -216,8 +241,8 @@ trainer_args = transformers.TrainingArguments(
     logging_steps=10,
     evaluation_strategy="steps" if val_set_size > 0 else "no",
     save_strategy="steps",
-    eval_steps=100 if val_set_size > 0 else None,
-    save_steps=150,
+    eval_steps=400 if val_set_size > 0 else None,
+    save_steps=100,
     max_steps=400,
     # fp16_opt_level='O3',
     optim='adamw_torch',
