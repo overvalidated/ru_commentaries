@@ -1,31 +1,39 @@
-import torch
-from transformers import GenerationConfig
+# %%s
 import pickle
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, DataCollatorWithPadding
+
 import torch
 from tqdm import tqdm
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, DataCollatorWithPadding
 
-with open("llama_comments_7b_final.pkl", "rb") as f:
+# %%
+BATCH_SIZE = 4
+TRANSLATION_MODEL = "facebook/nllb-200-3.3B"
+COMMENTS_DATA = "llama_comments_7b_final_2.pkl"
+PATH_TO_SAVE = "llama_comments_7b_final_translated_2.pkl"
+
+# %%
+# Loading ready english comments
+with open(COMMENTS_DATA, "rb") as f:
     responses = pickle.load(f)
-
-tokenizer = AutoTokenizer.from_pretrained("facebook/nllb-200-3.3B")
+# %%
+tokenizer = AutoTokenizer.from_pretrained(TRANSLATION_MODEL)
 model = AutoModelForSeq2SeqLM.from_pretrained(
-    "facebook/nllb-200-3.3B", torch_dtype=torch.float16, device_map='auto'
+    TRANSLATION_MODEL, torch_dtype=torch.float16, device_map="auto"
 )
+# %%
 code = list(responses.keys())
-comments = [entry.replace("</s>", '').strip() for entry in list(responses.values())]
-
+comments = [entry.replace("</s>", "").strip() for entry in list(responses.values())]
+# %%
 model = torch.compile(model)
-tokenizer.padding_side='left'
-
+tokenizer.padding_side = "left"
+# %%
 translated_responses = {}
-batch_size = 4
 collator = DataCollatorWithPadding(tokenizer, padding=True, pad_to_multiple_of=8)
 ## can be optimized with batching
 with torch.inference_mode():
-    for n in tqdm(range(0, len(comments), batch_size)):
-        inputs = tokenizer(comments[n:n+batch_size], return_tensors=None)
-        collated = collator(inputs).to('cuda:0')
+    for n in tqdm(range(0, len(comments), BATCH_SIZE)):
+        inputs = tokenizer(comments[n : n + BATCH_SIZE], return_tensors=None)
+        collated = collator(inputs).to("cuda:0")
 
         translated_tokens = model.generate(
             **collated,
@@ -33,15 +41,15 @@ with torch.inference_mode():
             max_length=256,
             num_beams=4
         )
-        decoded = tokenizer.batch_decode(
-            translated_tokens, skip_special_tokens=True
-        )
+        decoded = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)
         for entry in range(len(translated_tokens)):
-            translated_responses[n+entry] = decoded[entry]
+            translated_responses[n + entry] = decoded[entry]
 
         if n % 200 == 0:
-            with open("llama_comments_7b_final_translated.pkl", "wb") as f:
+            with open(PATH_TO_SAVE, "wb") as f:
                 pickle.dump(translated_responses, f)
 
-with open("llama_comments_7b_final_translated.pkl", "wb") as f:
+with open(PATH_TO_SAVE, "wb") as f:
     pickle.dump(translated_responses, f)
+
+# %%

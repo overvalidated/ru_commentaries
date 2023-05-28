@@ -12,20 +12,9 @@ from tqdm import tqdm
 import evaluate
 from utils.prompter import Prompter
 
-"""
-batch_size = 256
-micro_batch_size = 1
-learning_rate = 1e-4
-cutoff_len = 1024
-"""
 
 output_dir: str = "./lora-alpaca-3b"
-batch_size: int = 128
-micro_batch_size: int = 4
 num_epochs: int = 2
-cutoff_len: int = 256
-val_set_size: int = 2000
-train_on_inputs: bool = True  # if False, masks out inputs in loss
 prompt_template_name: str = "openassistant"  # The prompt template to use, will default to openassistant.
 batch_size = 256
 micro_batch_size = 1
@@ -35,26 +24,17 @@ eval_mode = False
 gradient_accumulation_steps = batch_size // micro_batch_size
 
 prompter = Prompter(prompt_template_name)
-
 tokenizer = transformers.LlamaTokenizer.from_pretrained(
     "openlm-research/open_llama_3b_350bt_preview"
 )
-
 model = transformers.LlamaForCausalLM.from_pretrained(
     "openlm-research/open_llama_3b_350bt_preview", 
     torch_dtype=torch.float16
 )  # Load Base Model
-# model.resize_token_embeddings(
-#     len(tokenizer)
-# )  # This model repo also contains several embeddings for special tokens that need to be loaded.
 
 tokenizer.pad_token_id = 0
 tokenizer.bad_token_id = 1
 tokenizer.eos_token_id = 2
-# model.config.eos_token_id = tokenizer.eos_token_id
-# model.config.bos_token_id = tokenizer.bos_token_id
-# model.config.pad_token_id = tokenizer.pad_token_id
-
 tokenizer.padding_side = "left"  # Allow batched inference
 
 def tokenize(prompt, add_eos_token=True, tensors=None):
@@ -76,22 +56,8 @@ def tokenize(prompt, add_eos_token=True, tensors=None):
     return result
 
 def generate_and_tokenize_prompt_mydata(data_point):
-    # full_prompt = prompter.generate_prompt(
-    #     "Explain this code in "
-    #     + ("Russian." if data_point["lang"] == "ru" else "English.")
-    #     + "Describe its purpose.",
-    #     data_point["code"],
-    #     data_point["comment"],
-    # )
     full_prompt = data_point['code'] + "<comment>" + data_point['comment']
     tokenized_full_prompt = tokenize(full_prompt)
-    # if not train_on_inputs:
-    # user_prompt = prompter.generate_prompt(
-    #     "Explain this code in "
-    #     + ("Russian." if data_point["lang"] == "ru" else "English.")
-    #     + "Describe its purpose.",
-    #     data_point["code"]
-    # )
     user_prompt = data_point['code'] + "<comment>"
     tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
     user_prompt_len = len(tokenized_user_prompt["input_ids"])
@@ -126,29 +92,9 @@ else:
     model = PeftModel.from_pretrained(model, output_dir, is_trainable=False)
     model.eval()
 
-# model = PeftModel.from_pretrained(
-#     model,
-#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b",
-#     torch_dtype=torch.float16,
-#     is_trainable=True,
-# )
-# model.print_trainable_parameters()
-
-# model.eos_token_id = tokenizer.eos_token_id
-# filename = hf_hub_download(
-#     "jordiclive/gpt4all-alpaca-oa-codealpaca-lora-7b", "extra_embeddings.pt"
-# )
-# embed_weights = torch.load(
-#     filename, map_location="cpu"
-# )  # Load embeddings for special tokens
-# model.base_model.model.model.embed_tokens.weight[32000:, :] = embed_weights.to(
-#     model.base_model.model.model.embed_tokens.weight.dtype
-# )  # Add special token embeddings
-# for param in model.base_model.model.model.embed_tokens.parameters():
-#     param.require_grad = True
 model = model.to("cuda")
-
 model.enable_input_require_grads()
+
 with open("llama_comments_7b_final.pkl", "rb") as f:
     data_eng = pkl.load(f)
 with open("llama_comments_7b_final_translated.pkl", "rb") as f:
@@ -204,7 +150,7 @@ data_translated4.comment = data_translated4.comment.str.replace('<unk>', '')
 data_translated4.comment = data_translated4.comment.str.replace('</s>', '')
 data_translated4.comment = data_translated4.comment.str.strip()
 data_translated4 = data_translated4[data_translated4.comment.map(len) > 40]
-print(data_translated4.head())
+
 data_translated = pd.concat([data_translated, data_translated2, data_translated3, data_translated4])
 data = datasets.Dataset.from_pandas(data_translated)
 
@@ -231,31 +177,23 @@ val_data = (
 trainer_args = transformers.TrainingArguments(
     per_device_train_batch_size=micro_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    # gradient_checkpointing=True,
     warmup_steps=100,
     num_train_epochs=num_epochs,
     learning_rate=learning_rate,
     fp16=True,
-    # bf16=True,
     tf32=True,
     logging_steps=10,
-    evaluation_strategy="steps" if val_set_size > 0 else "no",
+    evaluation_strategy="steps",
     save_strategy="steps",
-    eval_steps=400 if val_set_size > 0 else None,
+    eval_steps=400,
     save_steps=100,
     max_steps=400,
-    # fp16_opt_level='O3',
     optim='adamw_torch',
     output_dir=output_dir,
     save_total_limit=1,
     lr_scheduler_type='linear',
-    # deepspeed='ds_config_zero.json',
-    # load_best_model_at_end=True if val_set_size > 0 else False,
-    # ddp_find_unused_parameters=False if ddp else None,
-    # group_by_length=group_by_length,
-    report_to=None,  # "wandb" if use_wandb else None,
+    report_to=None,
     run_name=None,
-    # run_name=wandb_run_name if use_wandb else None,
 )
 
 trainer = transformers.Trainer(
@@ -285,10 +223,8 @@ rouge = evaluate.load('rouge')
 with torch.inference_mode():
     gts = []
     preds = []
-    i = 0
     for batch in tqdm(train_val["test"].shuffle(seed=42)):
         full_prompt = batch['code'] + "<comment>"
-        # tokenized_full_prompt = tokenize(full_prompt, tensors='pt', add_eos_token=False).to('cuda:0')
         tokenized_full_prompt = tokenizer(
             full_prompt, truncation=True, max_length=cutoff_len, return_tensors='pt'
         ).to('cuda:0')
@@ -303,8 +239,5 @@ with torch.inference_mode():
         ).split('<comment>')[-1]
         preds.append(predict)
         gts.append([batch['comment']])
-        i += 1
-        if i == 300:
-            break
     print('3b blue', sacrebleu.compute(predictions=preds, references=gts)['score'])
     print('3b rouge2', rouge.compute(predictions=preds, references=gts))

@@ -1,55 +1,42 @@
+import pickle as pkl
+
 import datasets
-import fire
+import evaluate
 import pandas as pd
 import torch
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 import transformers
-import pickle as pkl
-from huggingface_hub import hf_hub_download
-from peft import get_peft_model_state_dict, PeftModel, LoraConfig, get_peft_model
-import evaluate
+from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict
 from tqdm import tqdm
 from utils.prompter import Prompter
 
-"""
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+output_dir: str = "./lora-alpaca-final"
+num_epochs: int = 2
+prompt_template_name: str = (
+    "openassistant"  # The prompt template to use, will default to openassistant.
+)
 batch_size = 256
 micro_batch_size = 1
 learning_rate = 1e-4
-cutoff_len = 1024
-"""
-
-output_dir: str = "./lora-alpaca-final"
-batch_size: int = 128
-micro_batch_size: int = 4
-num_epochs: int = 2
-cutoff_len: int = 256
-val_set_size: int = 2000
-train_on_inputs: bool = True  # if False, masks out inputs in loss
-prompt_template_name: str = "openassistant"  # The prompt template to use, will default to openassistant.
-batch_size = 256
-micro_batch_size = 1
-learning_rate = 2e-4
-cutoff_len = 256+256
+cutoff_len = 128 + 256
 eval_mode = False
 gradient_accumulation_steps = batch_size // micro_batch_size
 
 prompter = Prompter(prompt_template_name)
-
-tokenizer = transformers.LlamaTokenizer.from_pretrained(
-    "decapoda-research/llama-7b-hf"
-)
-
+tokenizer = transformers.LlamaTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
 model = transformers.LlamaForCausalLM.from_pretrained(
-    "decapoda-research/llama-7b-hf", 
-    torch_dtype=torch.float16
+    "decapoda-research/llama-7b-hf",
+    torch_dtype=torch.float16,
 )  # Load Base Model  # This model repo also contains several embeddings for special tokens that need to be loaded.
 
+tokenizer.pad_token_id = 0
 model.config.eos_token_id = tokenizer.eos_token_id
 model.config.bos_token_id = tokenizer.bos_token_id
 model.config.pad_token_id = tokenizer.pad_token_id
-
 tokenizer.padding_side = "left"  # Allow batched inference
+
 
 def tokenize(prompt, add_eos_token=True):
     # there's probably a way to do this with the tokenizer settings
@@ -69,33 +56,21 @@ def tokenize(prompt, add_eos_token=True):
 
     return result
 
+
 def generate_and_tokenize_prompt_mydata(data_point):
-    # full_prompt = prompter.generate_prompt(
-    #     "Explain this code in "
-    #     + ("Russian." if data_point["lang"] == "ru" else "English.")
-    #     + "Describe its purpose.",
-    #     data_point["code"],
-    #     data_point["comment"],
-    # )
-    full_prompt = data_point['code'] + "<comment>" + data_point['comment']
+    full_prompt = data_point["code"] + "<comment>" + data_point["comment"]
     tokenized_full_prompt = tokenize(full_prompt)
-    # if not train_on_inputs:
-    # user_prompt = prompter.generate_prompt(
-    #     "Explain this code in "
-    #     + ("Russian." if data_point["lang"] == "ru" else "English.")
-    #     + "Describe its purpose.",
-    #     data_point["code"]
-    # )
-    user_prompt = data_point['code'] + "<comment>"
+    user_prompt = data_point["code"] + "<comment>"
     tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
     user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
-    tokenized_full_prompt["labels"] = [
-        -100
-    ] * user_prompt_len + tokenized_full_prompt["labels"][
+    tokenized_full_prompt["labels"] = [-100] * user_prompt_len + tokenized_full_prompt[
+        "labels"
+    ][
         user_prompt_len:
     ]  # could be sped up, probably
     return tokenized_full_prompt
+
 
 if not eval_mode:
     lora_r: int = 8
@@ -121,7 +96,6 @@ else:
     model.eval()
 
 model = model.to("cuda")
-
 model.enable_input_require_grads()
 
 with open("llama_comments_7b_final.pkl", "rb") as f:
@@ -142,8 +116,8 @@ data_translated = pd.DataFrame(
         "lang": "ru",
     }
 )
-data_translated.comment = data_translated.comment.str.replace('<unk>', '')
-data_translated.comment = data_translated.comment.str.replace('</s>', '')
+data_translated.comment = data_translated.comment.str.replace("<unk>", "")
+data_translated.comment = data_translated.comment.str.replace("</s>", "")
 data_translated.comment = data_translated.comment.str.strip()
 data_translated = data_translated[data_translated.comment.map(len) > 40]
 data_translated2 = pd.DataFrame(
@@ -153,8 +127,8 @@ data_translated2 = pd.DataFrame(
         "lang": "ru",
     }
 )
-data_translated2.comment = data_translated2.comment.str.replace('<unk>', '')
-data_translated2.comment = data_translated2.comment.str.replace('</s>', '')
+data_translated2.comment = data_translated2.comment.str.replace("<unk>", "")
+data_translated2.comment = data_translated2.comment.str.replace("</s>", "")
 data_translated2.comment = data_translated2.comment.str.strip()
 data_translated2 = data_translated2[data_translated2.comment.map(len) > 40]
 data_translated3 = pd.DataFrame(
@@ -164,8 +138,8 @@ data_translated3 = pd.DataFrame(
         "lang": "ru",
     }
 )
-data_translated3.comment = data_translated3.comment.str.replace('<unk>', '')
-data_translated3.comment = data_translated3.comment.str.replace('</s>', '')
+data_translated3.comment = data_translated3.comment.str.replace("<unk>", "")
+data_translated3.comment = data_translated3.comment.str.replace("</s>", "")
 data_translated3.comment = data_translated3.comment.str.strip()
 data_translated3 = data_translated3[data_translated3.comment.map(len) > 40]
 data_translated4 = pd.DataFrame(
@@ -175,12 +149,14 @@ data_translated4 = pd.DataFrame(
         "lang": "ru",
     }
 )
-data_translated4.comment = data_translated4.comment.str.replace('<unk>', '')
-data_translated4.comment = data_translated4.comment.str.replace('</s>', '')
+data_translated4.comment = data_translated4.comment.str.replace("<unk>", "")
+data_translated4.comment = data_translated4.comment.str.replace("</s>", "")
 data_translated4.comment = data_translated4.comment.str.strip()
 data_translated4 = data_translated4[data_translated4.comment.map(len) > 40]
-print(data_translated4.head())
-data_translated = pd.concat([data_translated, data_translated2, data_translated3, data_translated4])
+
+data_translated = pd.concat(
+    [data_translated, data_translated2, data_translated3, data_translated4]
+)
 data = datasets.Dataset.from_pandas(data_translated)
 
 train_val = data.train_test_split(test_size=0.1, shuffle=True, seed=42)
@@ -206,31 +182,22 @@ val_data = (
 trainer_args = transformers.TrainingArguments(
     per_device_train_batch_size=micro_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    gradient_checkpointing=True,
     warmup_steps=100,
     num_train_epochs=num_epochs,
     learning_rate=learning_rate,
     fp16=True,
-    # bf16=True,
     tf32=True,
     logging_steps=10,
-    evaluation_strategy="steps" if val_set_size > 0 else "no",
+    evaluation_strategy="steps",
     save_strategy="steps",
-    eval_steps=100 if val_set_size > 0 else None,
+    eval_steps=200,  # if val_set_size > 0 else None,
     save_steps=150,
-    max_steps=400,
-    # fp16_opt_level='O3',
-    optim='adamw_torch',
+    optim="adamw_torch",
     output_dir=output_dir,
     save_total_limit=1,
-    lr_scheduler_type='linear',
-    # deepspeed='ds_config_zero.json',
-    # load_best_model_at_end=True if val_set_size > 0 else False,
-    # ddp_find_unused_parameters=False if ddp else None,
-    # group_by_length=group_by_length,
+    lr_scheduler_type="linear",
     report_to=None,  # "wandb" if use_wandb else None,
     run_name=None,
-    # run_name=wandb_run_name if use_wandb else None,
 )
 
 trainer = transformers.Trainer(
@@ -242,7 +209,7 @@ trainer = transformers.Trainer(
         tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
     ),
 )
-model.config.use_cache = False
+# model.config.use_cache = False
 
 old_state_dict = model.state_dict
 model.state_dict = (
@@ -253,33 +220,36 @@ model = torch.compile(model)
 trainer.train()
 
 model.save_pretrained(output_dir)
-
-sacrebleu = evaluate.load('sacrebleu')
-rouge = evaluate.load('rouge')
+# %%
+sacrebleu = evaluate.load("sacrebleu")
+rouge = evaluate.load("rouge")
 
 with torch.inference_mode():
     gts = []
     preds = []
     i = 0
     for batch in tqdm(train_val["test"].shuffle(seed=42)):
-        full_prompt = batch['code'] + "<comment>"
+        full_prompt = batch["code"] + "<comment>"
         # tokenized_full_prompt = tokenize(full_prompt, tensors='pt', add_eos_token=False).to('cuda:0')
         tokenized_full_prompt = tokenizer(
-            full_prompt, truncation=True, max_length=cutoff_len, return_tensors='pt'
-        ).to('cuda:0')
+            full_prompt, truncation=True, max_length=cutoff_len, return_tensors="pt"
+        ).to("cuda:0")
 
         predict = tokenizer.decode(
             model.generate(
-                input_ids=tokenized_full_prompt["input_ids"], num_beams=1, max_new_tokens=256
+                input_ids=tokenized_full_prompt["input_ids"],
+                num_beams=1,
+                max_new_tokens=256,
             )
             .cpu()
             .numpy()[0],
-            skip_special_tokens=True
-        ).split('<comment>')[-1]
+            skip_special_tokens=True,
+        ).split("<comment>")[-1]
         preds.append(predict)
-        gts.append([batch['comment']])
+        gts.append([batch["comment"]])
         i += 1
         if i == 300:
             break
-    print('3b blue', sacrebleu.compute(predictions=preds, references=gts)['score'])
-    print('3b rouge2', rouge.compute(predictions=preds, references=gts))
+    print("3b blue", sacrebleu.compute(predictions=preds, references=gts)["score"])
+    print("3b rouge2", rouge.compute(predictions=preds, references=gts))
+# %%
